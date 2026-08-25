@@ -1,6 +1,7 @@
 # SnapOG — one-click Cloudflare Workers deploy (standalone repo guofu-ljg/snapog)
 # Secrets required: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
-# Synced from Auto-Company monorepo .github/workflows/snapog-deploy.yml (Cycle 15)
+# Synced from Auto-Company monorepo .github/workflows/snapog-deploy.yml (Cycle 16)
+# Missing secrets on push → soft-skip (green). workflow_dispatch without secrets → fail.
 name: deploy
 
 on:
@@ -20,8 +21,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    name: Gate secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Check Cloudflare secrets
+        id: check
+        run: |
+          set -euo pipefail
+          MISSING=0
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set"
+            MISSING=1
+          fi
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::notice::CLOUDFLARE_ACCOUNT_ID is not set"
+            MISSING=1
+          fi
+
+          if [ "${MISSING}" -eq 0 ]; then
+            echo "ready=true" >> "${GITHUB_OUTPUT}"
+            echo "Secrets present — deploy will run"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID. Run: bash scripts/set-github-secrets.sh"
+            exit 1
+          fi
+
+          echo "ready=false" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Secrets not configured — skipping deploy on push (soft-skip). Set secrets then: gh workflow run deploy"
+          echo "One-liner: export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... && bash scripts/set-github-secrets.sh"
+
   deploy:
     name: Deploy SnapOG
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -32,18 +74,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Require Cloudflare secrets
-        run: |
-          set -euo pipefail
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "::error::Missing secret CLOUDFLARE_API_TOKEN"
-            exit 1
-          fi
-          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
-            exit 1
-          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
