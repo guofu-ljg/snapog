@@ -16,12 +16,10 @@ bucket_name = "snapog-og-cache"
 ENVIRONMENT = "development"
 # Set AUTH_SECRET via `wrangler secret put AUTH_SECRET` for dashboard cookie signing
 
+# NOTE: Do NOT deploy with `--env production` unless you also duplicate
+# [[d1_databases]] / [[r2_buckets]] under that env — top-level bindings
+# are what `wrangler deploy` (default) and CI use. Staging is optional.
 [env.staging]
 name = "snapog-staging"
 [env.staging.vars]
 ENVIRONMENT = "staging"
-
-[env.production]
-name = "snapog"
-[env.production.vars]
-ENVIRONMENT = "production"

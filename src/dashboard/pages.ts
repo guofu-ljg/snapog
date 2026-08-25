@@ -449,7 +449,7 @@ const CSS = `
 function layout(title: string, body: string, description?: string): string {
   const desc =
     description
-    ?? 'SnapOG — Open Graph image API. Generate OG images at the edge via one GET request.';
+    ?? 'Generate Open Graph images with one curl. Hosted OG image API for Hugo, Astro, Rails, and static sites — skip self-hosted Satori. Free trial, Pro from $19/mo.';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -457,6 +457,11 @@ function layout(title: string, body: string, description?: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${title}</title>
   <meta name="description" content="${desc}" />
+  <meta name="keywords" content="og image api, open graph image generator, og:image api, curl og image, satori alternative hosted" />
+  <meta property="og:title" content="${title}" />
+  <meta property="og:description" content="${desc}" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
   <style>${CSS}</style>
 </head>
 <body>
@@ -499,7 +504,7 @@ export function landingPage(
   <section class="hero">
     <div class="container">
       <h1 class="hero-brand anim d1">Snap<span class="mark">OG</span></h1>
-      <p class="hero-headline anim d2">Open Graph images via one API call.</p>
+      <p class="hero-headline anim d2">OG images. One curl.</p>
       <p class="hero-support anim d3">
         Drop a URL in your meta tags. Get a cached PNG from the Cloudflare edge —
         no Next.js, no Playwright farm, no weekend spent on Satori.
@@ -670,9 +675,9 @@ export function landingPage(
   ${footer()}`;
 
   return layout(
-    'SnapOG — Open Graph image API',
+    'SnapOG — OG Image API via curl | No Next.js, No Satori Setup',
     body,
-    'SnapOG is an Open Graph image API. Generate cached OG images at the Cloudflare edge with one GET request.'
+    'Generate Open Graph images with one curl. Hosted OG image API for Hugo, Astro, Rails, and static sites — skip self-hosted Satori. Free trial, Pro from $19/mo.'
   );
 }
 

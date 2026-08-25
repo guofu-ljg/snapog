@@ -105,29 +105,33 @@ npm run typecheck
 
 ## Deployment
 
-**Fast path (≤5 min after browser login):**
+### Recommended: GitHub Actions (no local `wrangler login`)
+
+1. Cloudflare → API Tokens → **Edit Cloudflare Workers** → copy token + Account ID  
+2. GitHub repo Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`  
+3. Actions → **deploy** → Run workflow  
+
+CI creates D1/R2 if needed, applies migrations, sets `AUTH_SECRET`, deploys, then checks `/health` + demo `/og` PNG.
+
+Full runbook: see Auto-Company `docs/devops/cycle-15-snapog-ci-deploy.md` (or this repo’s Actions logs).
+
+### Local / token bootstrap
 
 ```bash
 npm install
-npx wrangler login
+# either:
+export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...
+# or: npx wrangler login
 bash scripts/bootstrap-prod.sh
-# optional: npx wrangler secret put STRIPE_PAYMENT_LINK
+# optional: printf '%s' 'https://buy.stripe.com/XXX' | npx wrangler secret put STRIPE_PAYMENT_LINK
 ```
 
-**Manual:**
+### Manual
 
 ```bash
-# 1. Create remote D1 database
-wrangler d1 create snapog-db
-# Update wrangler.toml with the database_id
-
-# 2. Apply migrations to remote
+wrangler d1 create snapog-db   # paste database_id into wrangler.toml
 npm run db:remote
-
-# 3. Create R2 bucket
 wrangler r2 bucket create snapog-og-cache
-
-# 4. Deploy
 wrangler deploy
 ```
 

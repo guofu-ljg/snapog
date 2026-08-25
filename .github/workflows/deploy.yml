@@ -1,0 +1,184 @@
+# SnapOG — one-click Cloudflare Workers deploy (standalone repo guofu-ljg/snapog)
+# Secrets required: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+# Synced from Auto-Company monorepo .github/workflows/snapog-deploy.yml (Cycle 15)
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "**"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapog-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy SnapOG
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      DB_NAME: snapog-db
+      R2_BUCKET: snapog-og-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require Cloudflare secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::Missing secret CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve D1 database_id
+        run: |
+          set -euo pipefail
+          CURRENT_ID="$(grep -E '^\s*database_id\s*=' wrangler.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+          if [ -n "${CURRENT_ID}" ] && ! echo "${CURRENT_ID}" | grep -qiE 'placeholder|CHANGE_ME|^$'; then
+            echo "D1 database_id already set: ${CURRENT_ID}"
+            exit 0
+          fi
+
+          echo "database_id is placeholder — creating or listing ${DB_NAME}"
+          DB_ID=""
+
+          set +e
+          CREATE_TXT="$(npx --yes wrangler d1 create "${DB_NAME}" 2>&1)"
+          CREATE_RC=$?
+          set -e
+          echo "${CREATE_TXT}"
+          DB_ID="$(echo "${CREATE_TXT}" | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1 || true)"
+
+          if [ -z "${DB_ID}" ]; then
+            echo "create did not yield UUID (rc=${CREATE_RC}); trying d1 list"
+            LIST_JSON="$(npx --yes wrangler d1 list --json 2>/dev/null || true)"
+            DB_ID="$(echo "${LIST_JSON}" | jq -r --arg n "${DB_NAME}" '
+              (if type=="array" then . else (.result // .databases // []) end)
+              | map(select(.name==$n))
+              | .[0].uuid // .[0].database_id // .[0].id // empty
+            ')"
+          fi
+
+          if [ -z "${DB_ID}" ] || [ "${DB_ID}" = "null" ]; then
+            echo "::error::Could not resolve D1 database_id for ${DB_NAME}"
+            exit 1
+          fi
+
+          sed -i "s/database_id = \".*\"/database_id = \"${DB_ID}\"/" wrangler.toml
+          echo "Wrote database_id=${DB_ID} to wrangler.toml (runner-local; commit separately if desired)"
+          grep database_id wrangler.toml
+
+      - name: Ensure R2 bucket
+        run: |
+          set -euo pipefail
+          set +e
+          OUT="$(npx --yes wrangler r2 bucket create "${R2_BUCKET}" 2>&1)"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          if [ "${RC}" -eq 0 ]; then
+            echo "R2 bucket created: ${R2_BUCKET}"
+          else
+            echo "R2 create non-zero (often already exists) — continuing"
+          fi
+
+      - name: Apply D1 migrations (remote)
+        run: npx --yes wrangler d1 migrations apply "${DB_NAME}" --remote
+
+      - name: Ensure AUTH_SECRET
+        run: |
+          set -euo pipefail
+          HAS_SECRET=0
+          set +e
+          LIST_JSON="$(npx --yes wrangler secret list --format=json 2>/dev/null)"
+          LIST_RC=$?
+          set -e
+          if [ "${LIST_RC}" -eq 0 ] && [ -n "${LIST_JSON}" ]; then
+            if echo "${LIST_JSON}" | jq -e 'map(.name) | index("AUTH_SECRET") != null' >/dev/null 2>&1; then
+              HAS_SECRET=1
+            fi
+          fi
+
+          if [ "${HAS_SECRET}" -eq 1 ]; then
+            echo "AUTH_SECRET already present — skip"
+            exit 0
+          fi
+
+          if [ -n "${AUTH_SECRET:-}" ]; then
+            SECRET="${AUTH_SECRET}"
+          else
+            SECRET="$(openssl rand -hex 32)"
+          fi
+          printf '%s' "${SECRET}" | npx --yes wrangler secret put AUTH_SECRET
+          echo "AUTH_SECRET set via non-interactive pipe"
+
+      - name: Deploy Worker
+        id: deploy
+        run: |
+          set -euo pipefail
+          DEPLOY_OUT="$(npx --yes wrangler deploy 2>&1)"
+          echo "${DEPLOY_OUT}"
+          BASE_URL="$(echo "${DEPLOY_OUT}" | grep -Eo 'https://[a-zA-Z0-9._-]+\.workers\.dev' | head -1 || true)"
+          if [ -z "${BASE_URL}" ]; then
+            echo "::error::Could not parse workers.dev URL from deploy output"
+            exit 1
+          fi
+          echo "base_url=${BASE_URL}" >> "${GITHUB_OUTPUT}"
+          echo "Deployed → ${BASE_URL}"
+
+      - name: Health + demo /og smoke
+        run: |
+          set -euo pipefail
+          BASE_URL="${{ steps.deploy.outputs.base_url }}"
+          HTTP_CODE="$(curl -sS -o /tmp/snapog-health.json -w '%{http_code}' "${BASE_URL}/health" || true)"
+          echo "HTTP ${HTTP_CODE}"
+          cat /tmp/snapog-health.json || true
+          echo ""
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "::error::/health did not return 200"
+            exit 1
+          fi
+          if ! jq -e '.ok == true' /tmp/snapog-health.json >/dev/null 2>&1; then
+            echo "::error::/health JSON missing ok:true"
+            exit 1
+          fi
+          echo "Health OK — ${BASE_URL}/health"
+
+          OG_CODE="$(curl -sS -o /tmp/snapog-demo.png -w '%{http_code}' \
+            "${BASE_URL}/og?title=ci-smoke&theme=dark" || true)"
+          echo "demo /og HTTP ${OG_CODE}"
+          file /tmp/snapog-demo.png || true
+          if [ "${OG_CODE}" != "200" ]; then
+            echo "::error::demo /og did not return 200"
+            exit 1
+          fi
+          if ! file /tmp/snapog-demo.png | grep -qi 'PNG'; then
+            echo "::error::demo /og body is not PNG"
+            exit 1
+          fi
+          echo "Demo OG OK — ${BASE_URL}/og?title=ci-smoke"

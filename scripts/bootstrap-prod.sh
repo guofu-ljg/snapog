@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SnapOG — production bootstrap (D1 + R2 + migrate + secret + deploy + health)
-# Prerequisite: `npx wrangler login` (browser once). Does NOT claim success if health fails.
+# Auth: CLOUDFLARE_API_TOKEN (+ optional CLOUDFLARE_ACCOUNT_ID) OR `npx wrangler login`.
+# Does NOT claim success if health fails.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,6 +29,14 @@ need_cmd openssl
 need_cmd npm
 need_cmd sed
 
+# Prefer official env; accept CF_API_TOKEN alias from older runbooks
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -n "${CF_API_TOKEN:-}" ]]; then
+  export CLOUDFLARE_API_TOKEN="$CF_API_TOKEN"
+fi
+if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" && -n "${CF_ACCOUNT_ID:-}" ]]; then
+  export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID"
+fi
+
 bold "=== SnapOG bootstrap-prod ==="
 echo "cwd: $ROOT"
 echo ""
@@ -40,11 +49,25 @@ fi
 
 # ── 1. whoami ─────────────────────────────────────────────────────────────────
 echo "[1] wrangler whoami"
+if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+  bold "检测到 CLOUDFLARE_API_TOKEN — 跳过 wrangler login 要求"
+  if [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+    echo "CLOUDFLARE_ACCOUNT_ID 已设置"
+  else
+    bold "提示：未设 CLOUDFLARE_ACCOUNT_ID（多账号时建议 export）"
+  fi
+fi
 WHOAMI_OUT="$("${WRANGLER[@]}" whoami 2>&1)" || true
 echo "$WHOAMI_OUT"
 if echo "$WHOAMI_OUT" | grep -qiE 'not authenticated|Please run .*login'; then
-  red "未登录 Cloudflare。先在本机执行（浏览器一次）："
-  echo "  cd $ROOT && npx wrangler login"
+  if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    red "CLOUDFLARE_API_TOKEN 已设置但 whoami 失败。"
+    echo "检查：Token 权限（Edit Cloudflare Workers）、是否过期、CLOUDFLARE_ACCOUNT_ID 是否正确。"
+  else
+    red "未登录 Cloudflare。任选其一："
+    echo "  A) export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...   # CI / 无人浏览器"
+    echo "  B) cd $ROOT && npx wrangler login                             # 本机浏览器一次"
+  fi
   exit 1
 fi
 green "✓ 已认证"
@@ -69,8 +92,12 @@ prompt_database_id() {
     echo "$DATABASE_ID"
     return
   fi
+  if [[ ! -t 0 ]]; then
+    red "非交互环境且无法自动拿到 database_id。请设 DATABASE_ID=... 后重跑。"
+    exit 1
+  fi
   red "无法自动拿到 database_id。请粘贴 UUID（或重跑前设 DATABASE_ID=...）："
-  read -r -p "database_id> " _id
+  read -r -p "database_id: " _id
   echo "$_id"
 }
 
@@ -137,13 +164,27 @@ green "✓ migrations applied"
 
 # ── 5. AUTH_SECRET ────────────────────────────────────────────────────────────
 echo "[5] wrangler secret put AUTH_SECRET"
-if [[ -n "${AUTH_SECRET:-}" ]]; then
-  SECRET="$AUTH_SECRET"
-else
-  SECRET="$(openssl rand -hex 32)"
+HAS_SECRET=0
+set +e
+LIST_JSON="$("${WRANGLER[@]}" secret list --format=json 2>/dev/null)"
+LIST_RC=$?
+set -e
+if [[ "$LIST_RC" -eq 0 && -n "$LIST_JSON" ]]; then
+  if echo "$LIST_JSON" | jq -e 'map(.name) | index("AUTH_SECRET") != null' >/dev/null 2>&1; then
+    HAS_SECRET=1
+  fi
 fi
-printf '%s' "$SECRET" | "${WRANGLER[@]}" secret put AUTH_SECRET
-green "✓ AUTH_SECRET 已设置"
+if [[ "$HAS_SECRET" -eq 1 && -z "${AUTH_SECRET:-}" ]]; then
+  green "✓ AUTH_SECRET 已存在 — 跳过"
+else
+  if [[ -n "${AUTH_SECRET:-}" ]]; then
+    SECRET="$AUTH_SECRET"
+  else
+    SECRET="$(openssl rand -hex 32)"
+  fi
+  printf '%s' "$SECRET" | "${WRANGLER[@]}" secret put AUTH_SECRET
+  green "✓ AUTH_SECRET 已设置"
+fi
 
 if [[ -n "${STRIPE_PAYMENT_LINK:-}" ]]; then
   echo "[5b] wrangler secret put STRIPE_PAYMENT_LINK"
@@ -187,20 +228,19 @@ green "✓ /health OK"
 
 bold ""
 bold "下一步（OG PNG 成功判据，需 API key）："
-cat <<EOF
-  # 注册 key
-  curl -sS -X POST "$BASE_URL/register" \\
-    -H 'Content-Type: application/x-www-form-urlencoded' \\
-    --data-urlencode "email=ops@example.com" \\
-    --data-urlencode "keyname=smoke" \\
-    --data-urlencode "tier=free" -o /tmp/snapog-reg.html
-  API_KEY=\$(grep -oE 'sk_[a-f0-9]{64}' /tmp/snapog-reg.html | head -1)
-
-  # 期望 HTTP 200 + PNG
-  curl -sS -o /tmp/snapog-hi.png -w "HTTP %{http_code}\\n" \\
-    "$BASE_URL/og?title=hi&key=\${API_KEY}"
-  file /tmp/snapog-hi.png
-EOF
+printf '%s\n' \
+  "  # 注册 key" \
+  "  curl -sS -X POST \"$BASE_URL/register\" \\" \
+  "    -H 'Content-Type: application/x-www-form-urlencoded' \\" \
+  "    --data-urlencode \"email=ops@example.com\" \\" \
+  "    --data-urlencode \"keyname=smoke\" \\" \
+  "    --data-urlencode \"tier=free\" -o /tmp/snapog-reg.html" \
+  "  API_KEY=\$(grep -oE 'sk_[a-f0-9]{64}' /tmp/snapog-reg.html | head -1)" \
+  "" \
+  "  # 期望 HTTP 200 + PNG" \
+  "  curl -sS -o /tmp/snapog-hi.png -w \"HTTP %{http_code}\\n\" \\" \
+  "    \"$BASE_URL/og?title=hi&key=\${API_KEY}\"" \
+  "  file /tmp/snapog-hi.png"
 
 green ""
 green "bootstrap 完成：Worker 已部署且 /health=200。OG PNG 请按上方命令验证（未自动宣称 /og 成功）。"

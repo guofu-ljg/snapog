@@ -187,6 +187,8 @@ async function serveOgPng(
     tierLabel: string;
     afterCacheHit?: () => Promise<void>;
     afterMiss?: () => Promise<void>;
+    /** 仅在 R2 miss、真正生成前调用；返回 Response 则中止生成 */
+    beforeGenerate?: () => Promise<Response | null>;
   }
 ): Promise<Response> {
   const cacheKey = await buildCacheKey(params, opts.watermark);
@@ -206,6 +208,11 @@ async function serveOgPng(
         'X-SnapOG-Tier': opts.tierLabel,
       },
     });
+  }
+
+  if (opts.beforeGenerate) {
+    const blocked = await opts.beforeGenerate();
+    if (blocked) return blocked;
   }
 
   const imageResponse = await generateOGImage(params, opts.watermark);
@@ -267,23 +274,25 @@ app.get('/og', async c => {
   if (parsed instanceof Response) return parsed;
   const params = parsed;
 
-  // 无 key → demo：强制水印 + IP 日限流
+  // 无 key → demo：强制水印；配额仅在真正生成（R2 miss）时扣减，避免首页预览自毁
   if (!rawKey) {
-    const quota = await checkAndBumpDemoQuota(c.env.DB, clientIp(c));
-    if (!quota.ok) {
-      return c.json(
-        {
-          error: 'Demo daily limit reached',
-          limit: DEMO_DAILY_LIMIT,
-          hint: 'Register a free API key at /register',
-        },
-        429
-      );
-    }
-
     return serveOgPng(c, params, {
       watermark: true,
       tierLabel: 'demo',
+      beforeGenerate: async () => {
+        const quota = await checkAndBumpDemoQuota(c.env.DB, clientIp(c));
+        if (!quota.ok) {
+          return c.json(
+            {
+              error: 'Demo daily limit reached',
+              limit: DEMO_DAILY_LIMIT,
+              hint: 'Register a free API key at /register',
+            },
+            429
+          );
+        }
+        return null;
+      },
     });
   }
 
