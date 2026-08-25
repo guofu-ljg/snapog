@@ -5,10 +5,16 @@ Generate stunning Open Graph images via API — hosted on Cloudflare Workers, ca
 ## Quick Start
 
 ```bash
-# Get a free API key at https://snapog.dev/register, then:
-curl "https://snapog.dev/og?title=My+Blog+Post&domain=myblog.com&key=sk_YOUR_KEY" \
+# Demo (no key) — watermarked, IP-limited:
+curl "https://YOUR_WORKER.workers.dev/og?title=My+Blog+Post&domain=myblog.com" \
+  --output og.png && open og.png
+
+# Or get a free API key at /register, then:
+curl "https://YOUR_WORKER.workers.dev/og?title=My+Blog+Post&domain=myblog.com&key=sk_YOUR_KEY" \
   --output og.png && open og.png
 ```
+
+> Production host will be `*.workers.dev` until custom domain `snapog.dev` is attached.
 
 ## API
 
@@ -98,6 +104,17 @@ npm run typecheck
 ```
 
 ## Deployment
+
+**Fast path (≤5 min after browser login):**
+
+```bash
+npm install
+npx wrangler login
+bash scripts/bootstrap-prod.sh
+# optional: npx wrangler secret put STRIPE_PAYMENT_LINK
+```
+
+**Manual:**
 
 ```bash
 # 1. Create remote D1 database
