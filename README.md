@@ -61,40 +61,33 @@ Free tier images include "snapog.dev" watermark.
 
 ### Prerequisites
 - Node.js 18+, npm
-- Wrangler (`npm install -g wrangler`)
-- A Cloudflare account with Workers access
+- Wrangler (`npm install` pulls it)
 
 ### Setup
 
 ```bash
-cd projects/snapog
+cd projects/snapog   # or repo root if you cloned guofu-ljg/snapog
 npm install
-
-# 1. Create D1 database
-wrangler d1 create snapog-db
-# Copy the returned database_id into wrangler.toml [d1_databases]
-
-# 2. Apply migrations locally
 npm run db:local
-
-# 3. Create R2 bucket (local R2 is simulated)
-# No setup needed for local dev — wrangler simulates R2
-
-# 4. Start dev server
-npm run dev
+npm run dev          # default wrangler port — or: npx wrangler dev --port 8799
 ```
 
-Open http://127.0.0.1:8787
+### Temporary public demo (NON-PRODUCTION)
+
+Secrets / workers.dev not ready yet? One command starts local Worker + a temporary reverse tunnel (cloudflared if present, else localhost.run):
+
+```bash
+bash scripts/public-demo.sh
+```
+
+Prints a temporary public BASE URL and verifies `/health` + `/og` PNG. **Do not** use that URL for Show HN or as the production Base URL — run `scripts/set-github-secrets.sh` for durable `*.workers.dev`.
 
 ### Test
 
 ```bash
-# Register a key via browser at http://127.0.0.1:8787/register
-# Then test with:
-API_KEY=sk_your_key bash sample/smoke-test.sh
-
-# Or direct curl:
-curl "http://127.0.0.1:8787/og?title=Hello+World&key=sk_your_key" --output og.png
+BASE_URL=http://127.0.0.1:8799 bash sample/smoke-test.sh
+# with key:
+API_KEY=sk_your_key BASE_URL=http://127.0.0.1:8799 bash sample/smoke-test.sh
 ```
 
 ### Typecheck

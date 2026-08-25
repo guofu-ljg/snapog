@@ -21,7 +21,7 @@ echo "  ✓ health"
 
 # Test 2: demo /og (no key) — landing path
 echo "[2] GET /og (demo, no key)"
-DEMO_OUT="$(mktemp /tmp/snapog-demo-XXXX.png)"
+DEMO_OUT="$(mktemp "${TMPDIR:-/tmp}/snapog-demo.XXXXXX")"
 DEMO_CODE="$(curl -sS -o "$DEMO_OUT" -w "%{http_code}" \
   "$BASE_URL/og?title=Hello+Demo&domain=test.com")"
 DEMO_CT="$(file -b --mime-type "$DEMO_OUT" 2>/dev/null || file -b "$DEMO_OUT")"
@@ -51,7 +51,7 @@ echo "  ✓ demo /og PNG"
 # Test 3: auth /og (optional)
 if [[ -n "$KEY" ]]; then
   echo "[3] GET /og?key=… (auth)"
-  OUT="$(mktemp /tmp/snapog-test-XXXX.png)"
+  OUT="$(mktemp "${TMPDIR:-/tmp}/snapog-test.XXXXXX")"
   HTTP_CODE="$(curl -sS -o "$OUT" -w "%{http_code}" \
     "$BASE_URL/og?title=Hello+World&description=Test&domain=test.com&key=$KEY")"
   SIZE="$(wc -c < "$OUT" | tr -d ' ')"
